@@ -13,7 +13,7 @@
 #  - Pull Request to main branch (test + build only, no deploy)
 # ══════════════════════════════════════════════════════════════
 
-name: TaskFlow CI/CD Pipeline
+name: TaskFlow CI/CD Pipelineq
 
 on:
   push:
