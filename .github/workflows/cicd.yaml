@@ -156,6 +156,10 @@ jobs:
             echo "🚀 Starting deployment — $(date)"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
+            # Set image variables explicitly (bashrc not loaded in SSH sessions)
+            export DOCKER_IMAGE_BACKEND=${{ secrets.DOCKERHUB_USERNAME }}/taskflow-backend
+            export DOCKER_IMAGE_FRONTEND=${{ secrets.DOCKERHUB_USERNAME }}/taskflow-frontend
+
             cd ~/task-project
 
             git pull origin main
