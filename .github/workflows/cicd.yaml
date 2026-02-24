@@ -1,1 +1,180 @@
 
+# ══════════════════════════════════════════════════════════════
+#  TaskFlow — CI/CD Pipeline
+#  .github/workflows/cicd.yml
+#
+#  PIPELINE STAGES:
+#  1. TEST    → Run unit tests on the Flask API
+#  2. BUILD   → Build & push Docker images to Docker Hub
+#  3. DEPLOY  → SSH into server and pull + restart containers
+#
+#  TRIGGERS:
+#  - Push to main branch
+#  - Pull Request to main branch (test + build only, no deploy)
+# ══════════════════════════════════════════════════════════════
+
+name: TaskFlow CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+# Global environment variables (non-secret)
+env:
+  DOCKER_IMAGE_BACKEND:  ${{ secrets.DOCKERHUB_USERNAME }}/taskflow-backend
+  DOCKER_IMAGE_FRONTEND: ${{ secrets.DOCKERHUB_USERNAME }}/taskflow-frontend
+
+jobs:
+
+  # ──────────────────────────────────────────────────────────
+  # STAGE 1: TEST
+  # Runs Python unit tests against the Flask API
+  # ──────────────────────────────────────────────────────────
+  test:
+    name: 🧪 Run Tests
+    runs-on: ubuntu-latest
+
+    # Spin up a real PostgreSQL for integration tests
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB:       taskflow_test
+          POSTGRES_USER:     taskuser
+          POSTGRES_PASSWORD: taskpass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: 📦 Install dependencies
+        run: |
+          pip install -r backend/requirements.txt
+          pip install pytest pytest-cov
+
+      - name: 🧪 Run tests
+        env:
+          DB_HOST:     localhost
+          DB_PORT:     5432
+          DB_NAME:     taskflow_test
+          DB_USER:     taskuser
+          DB_PASSWORD: taskpass
+        run: |
+          cd backend
+          pytest tests/ -v --tb=short --cov=app --cov-report=term-missing
+
+  # ──────────────────────────────────────────────────────────
+  # STAGE 2: BUILD & PUSH
+  # Builds Docker images and pushes to Docker Hub
+  # Only runs on push to main (not on PRs)
+  # ──────────────────────────────────────────────────────────
+  build:
+    name: 🐳 Build & Push Docker Images
+    runs-on: ubuntu-latest
+    needs: test                          # Only runs if tests pass
+    if: github.ref == 'refs/heads/main'  # Skip on pull requests
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔑 Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: ⚡ Set up Docker Buildx (faster builds)
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🏗️ Build & Push Backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: true
+          # Tag with both commit SHA (unique) and latest
+          tags: |
+            ${{ env.DOCKER_IMAGE_BACKEND }}:latest
+            ${{ env.DOCKER_IMAGE_BACKEND }}:${{ github.sha }}
+          cache-from: type=gha    # GitHub Actions cache (faster rebuilds)
+          cache-to:   type=gha,mode=max
+
+      - name: 🏗️ Build & Push Frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          push: true
+          tags: |
+            ${{ env.DOCKER_IMAGE_FRONTEND }}:latest
+            ${{ env.DOCKER_IMAGE_FRONTEND }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+
+      - name: 📋 Print image details
+        run: |
+          echo "✅ Backend image : ${{ env.DOCKER_IMAGE_BACKEND }}:${{ github.sha }}"
+          echo "✅ Frontend image: ${{ env.DOCKER_IMAGE_FRONTEND }}:${{ github.sha }}"
+
+  # ──────────────────────────────────────────────────────────
+  # STAGE 3: DEPLOY
+  # SSHs into the production server and restarts containers
+  # Only runs on push to main after build succeeds
+  # ──────────────────────────────────────────────────────────
+  deploy:
+    name: 🚀 Deploy to Server
+    runs-on: ubuntu-latest
+    needs: build    # Only runs if build & push succeeded
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🚀 Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:     ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key:      ${{ secrets.SERVER_SSH_KEY }}
+          port:     22
+          script: |
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "🚀 Starting deployment — $(date)"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+            # Go to project directory
+            cd ~/task-project
+
+            # Pull latest code
+            git pull origin main
+
+            # Pull latest Docker images from Docker Hub
+            docker compose pull
+
+            # Restart containers with zero downtime approach:
+            # --no-deps: only recreate changed containers
+            docker compose up -d --no-deps --remove-orphans
+
+            # Remove dangling images to free disk space
+            docker image prune -f
+
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "✅ Deployment complete — $(date)"
+            echo "Running containers:"
+            docker compose ps
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
