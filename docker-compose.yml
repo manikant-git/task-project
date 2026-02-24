@@ -1,0 +1,97 @@
+# ══════════════════════════════════════════════════════════════
+#  TaskFlow – Three-Tier Architecture
+#  docker-compose.yml
+#
+#  Tier 1 (Presentation) : frontend  – Nginx + HTML  → port 80
+#  Tier 2 (Application)  : backend   – Flask API      → port 5000 (internal)
+#  Tier 3 (Data)         : db        – PostgreSQL      → port 5432 (internal)
+# ══════════════════════════════════════════════════════════════
+
+version: "3.9"
+
+services:
+
+  # ── TIER 3: Database ──────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: taskflow-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       taskflow
+      POSTGRES_USER:     taskuser
+      POSTGRES_PASSWORD: taskpass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data   # Persistent data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql  # Seed data
+    networks:
+      - backend-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taskuser -d taskflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # ⚠️  DB port is NOT exposed to the host – only the backend can reach it
+    # Uncomment below ONLY for local debugging:
+    # ports:
+    #   - "5432:5432"
+
+
+  # ── TIER 2: Backend API ───────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: taskflow-backend
+    restart: unless-stopped
+    environment:
+      DB_HOST:     db           # Docker service name resolves automatically
+      DB_PORT:     5432
+      DB_NAME:     taskflow
+      DB_USER:     taskuser
+      DB_PASSWORD: taskpass
+    networks:
+      - backend-net    # Can talk to DB
+      - frontend-net   # Can be reached by Nginx
+    depends_on:
+      db:
+        condition: service_healthy   # Wait for DB to be ready
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    # ⚠️  Backend port is NOT exposed to the host – only Nginx reaches it
+    # ports:
+    #   - "5000:5000"
+
+
+  # ── TIER 1: Frontend (Nginx) ──────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: taskflow-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"       # ✅  Only this port is exposed to the internet
+    networks:
+      - frontend-net  # Can talk to backend
+    depends_on:
+      backend:
+        condition: service_healthy
+
+
+# ── Networks (network segmentation for security) ──────────────
+networks:
+  frontend-net:
+    # Nginx ↔ Backend only
+    driver: bridge
+  backend-net:
+    # Backend ↔ DB only
+    driver: bridge
+
+
+# ── Volumes ───────────────────────────────────────────────────
+volumes:
+  postgres_data:
+    # Data persists across container restarts

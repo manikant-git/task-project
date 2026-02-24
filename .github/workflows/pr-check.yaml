@@ -1,0 +1,68 @@
+# ══════════════════════════════════════════════════════════════
+#  Pull Request Check
+#  .github/workflows/pr-check.yml
+#
+#  Runs on every Pull Request to validate code before merge.
+#  Gives instant feedback — no broken code merges to main.
+# ══════════════════════════════════════════════════════════════
+
+name: PR Check
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint-and-test:
+    name: 🔍 Lint & Test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB:       taskflow_test
+          POSTGRES_USER:     taskuser
+          POSTGRES_PASSWORD: taskpass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: 📦 Install dependencies
+        run: |
+          pip install -r backend/requirements.txt
+          pip install pytest flake8
+
+      - name: 🔍 Lint with flake8
+        run: |
+          # Check for syntax errors and critical issues
+          flake8 backend/app.py --max-line-length=100 --select=E9,F63,F7,F82
+          echo "✅ No critical lint errors"
+
+      - name: 🧪 Run tests
+        env:
+          DB_HOST:     localhost
+          DB_PORT:     5432
+          DB_NAME:     taskflow_test
+          DB_USER:     taskuser
+          DB_PASSWORD: taskpass
+        run: |
+          cd backend
+          pytest tests/ -v
+
+      - name: 🐳 Validate Docker Compose file
+        run: docker compose config --quiet && echo "✅ docker-compose.yml is valid"
