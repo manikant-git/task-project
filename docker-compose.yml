@@ -7,8 +7,6 @@
 #  Tier 3 (Data)         : db        – PostgreSQL      → port 5432 (internal)
 # ══════════════════════════════════════════════════════════════
 
-version: "3.9"
-
 services:
 
   # ── TIER 3: Database ──────────────────────────────────────
@@ -21,8 +19,8 @@ services:
       POSTGRES_USER:     taskuser
       POSTGRES_PASSWORD: taskpass
     volumes:
-      - postgres_data:/var/lib/postgresql/data   # Persistent data
-      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql  # Seed data
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - backend-net
     healthcheck:
@@ -31,35 +29,33 @@ services:
       timeout: 5s
       retries: 5
     # ⚠️  DB port is NOT exposed to the host – only the backend can reach it
-    # Uncomment below ONLY for local debugging:
     # ports:
     #   - "5432:5432"
 
 
   # ── TIER 2: Backend API ───────────────────────────────────
   backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: $DOCKER_IMAGE_BACKEND   
     container_name: taskflow-backend
     restart: unless-stopped
     environment:
-      DB_HOST:     db           # Docker service name resolves automatically
+      DB_HOST:     db
       DB_PORT:     5432
       DB_NAME:     taskflow
       DB_USER:     taskuser
       DB_PASSWORD: taskpass
     networks:
-      - backend-net    # Can talk to DB
-      - frontend-net   # Can be reached by Nginx
+      - backend-net
+      - frontend-net
     depends_on:
       db:
-        condition: service_healthy   # Wait for DB to be ready
+        condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:5000/api/health || exit 1"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/api/health')"]
       interval: 15s
       timeout: 5s
       retries: 5
+      start_period: 30s
     # ⚠️  Backend port is NOT exposed to the host – only Nginx reaches it
     # ports:
     #   - "5000:5000"
@@ -67,31 +63,26 @@ services:
 
   # ── TIER 1: Frontend (Nginx) ──────────────────────────────
   frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
+    image: $DOCKER_IMAGE_FRONTEND  
     container_name: taskflow-frontend
     restart: unless-stopped
     ports:
-      - "80:80"       # ✅  Only this port is exposed to the internet
+      - "80:80"
     networks:
-      - frontend-net  # Can talk to backend
+      - frontend-net
     depends_on:
       backend:
         condition: service_healthy
 
 
-# ── Networks (network segmentation for security) ──────────────
+# ── Networks ──────────────────────────────────────────────────
 networks:
   frontend-net:
-    # Nginx ↔ Backend only
     driver: bridge
   backend-net:
-    # Backend ↔ DB only
     driver: bridge
 
 
 # ── Volumes ───────────────────────────────────────────────────
 volumes:
   postgres_data:
-    # Data persists across container restarts
